@@ -1,0 +1,6 @@
+{
+  "name": "O'quvchi Baholari Tahlili",
+  "description": "O'quvchilarning haftalik, oylik, choraklik va yillik baholarini tahlil qiluvchi mobil ilova.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
