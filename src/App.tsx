@@ -20,22 +20,87 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { JournalRecord } from './types';
 
+// Pre-defined student lists for Class 6 A and B divisions
+const STUDENTS_6A = [
+  "Malikov Zakariyo",
+  "Malikova Fotima",
+  "Muratov Abdulbosit",
+  "Muratov Muhammadyusuf",
+  "Muratov Muhammad",
+  "Anvarov Baxriddin",
+  "Soxibjonov G'olibjon",
+  "Rasulova Shukrona",
+  "Hamidullayeva Mubina",
+  "Mirahmadova Oysha",
+  "Nasimov Abdullo",
+  "Abdulbositov Abubakr",
+  "Giyasov Muhammadali",
+  "Asqaraliyev Asadbek",
+  "Abduqodirov Tolibjon"
+];
+
+const STUDENTS_6B = [
+  "Odiljonov Firdavsbek",
+  "To'xtaraliyev Shoxakbar",
+  "Mamadaliyev Abdulhakim",
+  "Bositxonov Boqixon",
+  "Umarov Abdullo",
+  "Abduqahharov Abdulaziz",
+  "Mamadaliyev Mus'ab",
+  "Najmiddinov Abdurahmon",
+  "Karimov Jaloliddin",
+  "Mahmudjanov Ali",
+  "Abduvahobov Muhammadvafo",
+  "Zokirov Muhammadali",
+  "Azimova Hadija",
+  "Muhammadjonova Lobarxon",
+  "Mirsobitova Soliha",
+  "Muratova Madina",
+  "Rahmatullayev Sayfullo",
+  "Ismailov Umarxon",
+  "Mahmudjanov Ubaydullo"
+];
+
 export default function App() {
   // 1. Core States & Persistence (connected to server backend)
-  const [records, setRecords] = useState<JournalRecord[]>([]);
+  const [records, setRecords] = useState<JournalRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem('kitob_jurnali_records');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch (e) {
+      console.error("Local storage load error:", e);
+    }
+    return [];
+  });
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
     return localStorage.getItem('is_auth_imtihon') === 'true';
   });
+  const [activeUser, setActiveUser] = useState<string>(() => {
+    return localStorage.getItem('active_auth_username') || 'mirjalol-t';
+  });
   const [username, setUsername] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [loginError, setLoginError] = useState<string>('');
 
+  const displayName = useMemo(() => {
+    const norm = activeUser.trim().toLowerCase();
+    if (norm === 'mirjalol-t') return 'Mirjalol Turdamirzayev';
+    if (norm === 'firdavsiy') return 'Firdavsbek Odiljonov';
+    if (norm === 'admin') return 'admin';
+    if (norm === 'gey') return 'gey';
+    return activeUser || 'Foydalanuvchi';
+  }, [activeUser]);
+
   // UI Filter control
   const [selectedClass, setSelectedClass] = useState<number>(6); // Default class 6
+  const [selectedClassLetter, setSelectedClassLetter] = useState<'HAMMASI' | 'A-SINF' | 'B-SINF'>('HAMMASI');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [notification, setNotification] = useState<string>('');
 
@@ -52,6 +117,7 @@ export default function App() {
 
   // Modal Form Inputs state
   const [formClassGroup, setFormClassGroup] = useState<number>(6);
+  const [formClassLetter, setFormClassLetter] = useState<'A' | 'B' | ''>('A');
   const [formName, setFormName] = useState<string>('');
   const [formExamType, setFormExamType] = useState<'Haftalik imtihon' | 'Choraklik imtihon' | 'Oylik imtihon' | 'Yillik imtihon' | 'Kitobxonlik imtihoni'>('Kitobxonlik imtihoni');
   const [formSubject, setFormSubject] = useState<string>('Matematika');
@@ -60,18 +126,51 @@ export default function App() {
   const [formResult, setFormResult] = useState<number>(0);
   const [formGrade, setFormGrade] = useState<number>(0);
 
-  // Fetch from backend on initial mount
+  // Fetch from backend on initial mount and merge content
   useEffect(() => {
     fetch('/api/records')
       .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setRecords(data);
+      .then(serverData => {
+        if (Array.isArray(serverData)) {
+          setRecords(prevLocal => {
+            const recordMap = new Map<string, JournalRecord>();
+            
+            // 1. Feed local items
+            prevLocal.forEach(item => {
+              if (item && item.id) recordMap.set(item.id, item);
+            });
+            
+            // 2. Feed server items (only if local doesn't exist)
+            serverData.forEach(item => {
+              if (item && item.id) {
+                if (!recordMap.has(item.id)) {
+                  recordMap.set(item.id, item);
+                }
+              }
+            });
+            
+            const mergedList = Array.from(recordMap.values());
+            
+            // If merged is different from server list, sync it up to server so the server has it!
+            const serverIds = new Set(serverData.map(s => s.id));
+            const hasLocalAdditions = mergedList.some(item => !serverIds.has(item.id));
+            if (hasLocalAdditions || mergedList.length !== serverData.length) {
+              fetch('/api/records', {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(mergedList)
+              }).catch(err => console.error("Initial restore sync failure:", err));
+            }
+            
+            // Save the merged back to localStorage too
+            localStorage.setItem('kitob_jurnali_records', JSON.stringify(mergedList));
+            return mergedList;
+          });
         }
         setIsLoading(false);
       })
       .catch(err => {
-        console.error("Ma'lumotlarni yuklashda xato:", err);
+        console.error("Ma'lumotlarni yuklashda xator, local storage ishlatilmoqda:", err);
         setIsLoading(false);
       });
   }, []);
@@ -94,12 +193,22 @@ export default function App() {
   // Handle Login Authentication
   const handleLoginSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (username === 'mirjalol-t' && password === 't-mirjalol') {
+    const cleanUsername = username.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    const isValidMirjalol = cleanUsername === 'mirjalol-t' && cleanPassword === 't-mirjalol';
+    const isValidMental = cleanUsername === 'mental' && cleanPassword === 'mental';
+    const isValidAdmin = cleanUsername === 'admin' && cleanPassword === 'admin';
+    const isValidFirdavsiy = cleanUsername === 'firdavsiy' && cleanPassword === 'wish';
+
+    if (isValidMirjalol || isValidMental || isValidAdmin || isValidFirdavsiy) {
       setIsAuthenticated(true);
       localStorage.setItem('is_auth_imtihon', 'true');
+      localStorage.setItem('active_auth_username', cleanUsername);
+      setActiveUser(cleanUsername);
       setLoginError('');
     } else {
-      setLoginError("Login yoki parol noto'g'ri!");
+      setLoginError("Login yoki parol noto'g'ri! Iltimos qaytadan urinib ko'ring (bo'sh joylarsiz yozing).");
     }
   };
 
@@ -107,6 +216,8 @@ export default function App() {
   const handleLogout = () => {
     setIsAuthenticated(false);
     localStorage.removeItem('is_auth_imtihon');
+    localStorage.removeItem('active_auth_username');
+    setActiveUser('');
     setUsername('');
     setPassword('');
   };
@@ -178,6 +289,7 @@ export default function App() {
   const handleOpenModal = (type: 'O\'quvchi' | 'O\'qituvchi') => {
     setModalType(type);
     setFormClassGroup(selectedClass);
+    setFormClassLetter('A'); // default select division A
     setFormName('');
     setFormExamType('Kitobxonlik imtihoni');
     setFormBookName('');
@@ -191,8 +303,8 @@ export default function App() {
   const handleSaveModalRecord = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formName.trim()) {
-      alert("Iltimos, Ism va Familiyani kiriting!");
+    if (!formName.trim() || formName === '--_SELECT_--') {
+      alert("Iltimos, ism va familiyani to'liq tanlang yoki kiriting!");
       return;
     }
 
@@ -200,6 +312,7 @@ export default function App() {
       id: `record-${Date.now()}`,
       type: modalType,
       classGroup: formClassGroup,
+      classLetter: formClassLetter,
       name: formName.trim(),
       examType: formExamType,
       date: formDate,
@@ -216,15 +329,31 @@ export default function App() {
     setRecords(prev => [newRecord, ...prev]);
     setShowAddModal(false);
     setSelectedClass(formClassGroup); // Switch view to saved class
+    
+    // Auto align main screen class group letter to match what was added so they can see it instantly
+    if (formClassLetter === 'A') {
+      setSelectedClassLetter('A-SINF');
+    } else if (formClassLetter === 'B') {
+      setSelectedClassLetter('B-SINF');
+    } else {
+      setSelectedClassLetter('HAMMASI');
+    }
+
     setNotification(`${formName.trim()} yozuvi jurnala muvaffaqiyatli qo'shildi!`);
     setTimeout(() => setNotification(''), 4000);
   };
 
-  // Filter records based on active class and search query
+  // Filter records based on active class, division letter, and search query
   const filteredRecords = useMemo(() => {
     return records.filter(rec => {
       // 1. filter by class
       if (rec.classGroup !== selectedClass) return false;
+
+      // 1b. filter by division letter (A or B subclass)
+      if (selectedClassLetter !== 'HAMMASI') {
+        const targetLetter = selectedClassLetter === 'A-SINF' ? 'A' : 'B';
+        if (rec.classLetter !== targetLetter) return false;
+      }
 
       // 2. filter by search text query
       if (searchQuery.trim() !== '') {
@@ -238,11 +367,18 @@ export default function App() {
       }
       return true;
     });
-  }, [records, selectedClass, searchQuery]);
+  }, [records, selectedClass, selectedClassLetter, searchQuery]);
 
-  // Statistics for the selected class
+  // Statistics for the selected class (taking division into account)
   const classStats = useMemo(() => {
-    const classRecords = records.filter(rec => rec.classGroup === selectedClass);
+    const classRecords = records.filter(rec => {
+      if (rec.classGroup !== selectedClass) return false;
+      if (selectedClassLetter !== 'HAMMASI') {
+        const targetLetter = selectedClassLetter === 'A-SINF' ? 'A' : 'B';
+        if (rec.classLetter !== targetLetter) return false;
+      }
+      return true;
+    });
     const studentsOnly = classRecords.filter(rec => rec.type === 'O\'quvchi');
     const teachersOnly = classRecords.filter(rec => rec.type === 'O\'qituvchi');
     return {
@@ -250,7 +386,7 @@ export default function App() {
       students: studentsOnly.length,
       teachers: teachersOnly.length
     };
-  }, [records, selectedClass]);
+  }, [records, selectedClass, selectedClassLetter]);
 
   // Format date correctly to Uzbekistan style DD.MM.YYYY
   const formatUzDate = (dateString: string) => {
@@ -481,7 +617,7 @@ export default function App() {
                     ? 'text-emerald-450'
                     : 'text-emerald-300'
               }`}>
-                Xush kelibsiz, Mirjalol Turdamirzayev 👋
+                Xush kelibsiz, {displayName} 👋
               </p>
             </div>
           </div>
@@ -563,7 +699,7 @@ export default function App() {
               title="Tizimdan chiqish"
             >
               <LogOut size={14} className="text-red-500 hover:scale-110 active:scale-95 transition-transform" />
-              Mirjalol Turdamirzayev (Chiqish)
+              {displayName} (Chiqish)
             </button>
           </div>
 
@@ -600,7 +736,7 @@ export default function App() {
             <span className="text-2xl animate-bounce shrink-0">👋</span>
             <div>
               <h4 className="text-xs font-black uppercase tracking-wider">Tizim Administratori</h4>
-              <p className="text-xs font-extrabold mt-0.5">Xush kelibsiz, Mirjalol Turdamirzayev!</p>
+              <p className="text-xs font-extrabold mt-0.5">Xush kelibsiz, {displayName}!</p>
             </div>
           </div>
           <span className="text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-xl bg-emerald-500/10 text-emerald-500 border border-emerald-500/15 max-w-fit">
@@ -624,7 +760,7 @@ export default function App() {
           <div className="p-6 space-y-6">
 
             {/* Sinf Filtri section matching Image 1 */}
-            <div className="space-y-3">
+            <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <span className="text-emerald-600 text-sm">🗂️</span>
                 <span className={labelClass}>
@@ -654,6 +790,55 @@ export default function App() {
                     </span>
                   </button>
                 ))}
+              </div>
+
+              {/* Class Letter Divisions selector (A-sinf / B-sinf / Barchasi) */}
+              <div className="flex flex-wrap items-center gap-2 pt-2.5 border-t border-dashed border-stone-150">
+                <span className="text-[10px] font-black uppercase text-stone-400 tracking-wider mr-1.5">
+                  SINF TURI / GURUHI:
+                </span>
+                <div className="flex rounded-xl bg-stone-100 p-0.5 border border-stone-200">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedClassLetter('HAMMASI')}
+                    className={`px-3 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                      selectedClassLetter === 'HAMMASI'
+                        ? 'bg-white text-stone-900 shadow-3xs'
+                        : 'text-stone-500 hover:text-stone-800'
+                    }`}
+                  >
+                    👥 Barchasi
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedClassLetter('A-SINF')}
+                    className={`px-3 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                      selectedClassLetter === 'A-SINF'
+                        ? 'bg-emerald-650 text-white shadow-3xs'
+                        : 'text-stone-500 hover:text-emerald-700'
+                    }`}
+                  >
+                    🅰️ A - sinf
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedClassLetter('B-SINF')}
+                    className={`px-3 py-1 text-[11px] font-bold rounded-lg transition-all cursor-pointer ${
+                      selectedClassLetter === 'B-SINF'
+                        ? 'bg-emerald-650 text-white shadow-3xs'
+                        : 'text-stone-500 hover:text-emerald-700'
+                    }`}
+                  >
+                    🅱️ B - sinf
+                  </button>
+                </div>
+
+                {/* Info status cue for 6th class list */}
+                {selectedClass === 6 && (
+                  <span className="text-[10.5px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-150 ml-auto hidden sm:inline-block">
+                    {selectedClassLetter === 'HAMMASI' ? "6-A va 6-B to'liq tarkibi faol" : selectedClassLetter === 'A-SINF' ? "Simulyatorda 6-A talabalari sozlangan" : "Simulyatorda 6-B talabalari sozlangan"}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -730,7 +915,14 @@ export default function App() {
                             </span>
                           </td>
                           <td className={tableRowNameClass}>
-                            {rec.name}
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5">
+                              <span>{rec.name}</span>
+                              {rec.classLetter && (
+                                <span className="inline-flex max-w-fit items-center text-[9px] font-black uppercase text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-150 tracking-wider">
+                                  {rec.classGroup}-{rec.classLetter}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className={`py-3.5 px-4 font-bold font-sans whitespace-nowrap ${bgTheme === 'oq' ? 'text-stone-600' : 'text-stone-300'}`}>
                             {rec.examType}
@@ -848,14 +1040,19 @@ export default function App() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-stone-200 overflow-hidden flex flex-col"
+              className="bg-white rounded-3xl w-full max-w-sm sm:max-w-xl md:max-w-xl lg:max-w-2xl landscape:max-w-2xl shadow-2xl border border-stone-200 overflow-hidden flex flex-col max-h-[96vh] md:max-h-[90vh] transition-all duration-300"
             >
               
               {/* Modal Header */}
-              <div className="px-6 py-4.5 bg-white border-b border-stone-100 flex items-center justify-between">
-                <h3 className="font-sans font-black text-stone-900 text-sm tracking-tight capitalize">
-                  Yangi natija qo'shish
-                </h3>
+              <div className="px-6 py-4.5 bg-white border-b border-stone-100 flex items-center justify-between shrink-0">
+                <div className="space-y-0.5">
+                  <h3 className="font-sans font-black text-stone-900 text-sm tracking-tight capitalize">
+                    Yangi natija qo'shish
+                  </h3>
+                  <p className="text-[10px] text-stone-400 font-bold uppercase tracking-wider hidden sm:block">
+                    Format: {window.innerWidth >= 1024 ? "Notebook o'lchami 💻" : window.innerWidth >= 640 ? "Yonboshlangan o'lcham 📱" : "Telefon o'lchami 📱"}
+                  </p>
+                </div>
                 <button
                   onClick={() => setShowAddModal(false)}
                   className="w-8 h-8 rounded-full hover:bg-stone-100 text-stone-400 hover:text-stone-700 flex items-center justify-center transition"
@@ -865,170 +1062,275 @@ export default function App() {
               </div>
 
               {/* Modal Form */}
-              <form onSubmit={handleSaveModalRecord} className="p-6 space-y-4">
+              <form onSubmit={handleSaveModalRecord} className="flex flex-col flex-1 overflow-hidden">
                 
-                {/* 0. Foydalanuvchi Turi Selection */}
-                <div>
-                  <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                    Kim uchun (Foydalanuvchi turi)
-                  </label>
-                  <select
-                    value={modalType}
-                    onChange={(e) => setModalType(e.target.value as 'O\'quvchi' | 'O\'qituvchi')}
-                    className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
-                  >
-                    <option value="O'quvchi">O'quvchi</option>
-                    <option value="O'qituvchi">O'qituvchi</option>
-                  </select>
-                </div>
+                {/* Scrollable Container for inputs to support mobile rotation/height limits */}
+                <div className="p-6 overflow-y-auto space-y-4 max-h-[60vh] sm:max-h-[65vh] md:max-h-none">
+                  
+                  {/* Dynamic Adaptive Responsive Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 landscape:grid-cols-2 md:grid-cols-2 gap-x-5 gap-y-4">
+                    
+                     {/* 0. Foydalanuvchi Turi Selection */}
+                     <div className="col-span-1">
+                       <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                         Kim uchun (Foydalanuvchi turi)
+                       </label>
+                       <select
+                         value={modalType}
+                         onChange={(e) => {
+                           const val = e.target.value as 'O\'quvchi' | 'O\'qituvchi';
+                           setModalType(val);
+                           if (val === 'O\'quvchi' && formClassGroup === 6) {
+                             setFormClassLetter('A');
+                             setFormName(STUDENTS_6A[0]);
+                           } else {
+                             setFormName('');
+                           }
+                         }}
+                         className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
+                       >
+                         <option value="O'quvchi">O'quvchi</option>
+                         <option value="O'qituvchi">O'qituvchi</option>
+                       </select>
+                     </div>
+ 
+                     {/* 1. Sinf Row */}
+                     <div className="col-span-1 grid grid-cols-2 gap-2">
+                       <div>
+                         <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                           Sinf
+                         </label>
+                         <select
+                           value={formClassGroup}
+                           onChange={(e) => {
+                             const selectedVal = Number(e.target.value);
+                             setFormClassGroup(selectedVal);
+                             // Preset name based on selected section choice
+                             if (selectedVal === 6 && modalType === 'O\'quvchi') {
+                               if (formClassLetter === 'A') {
+                                 setFormName(STUDENTS_6A[0]);
+                               } else if (formClassLetter === 'B') {
+                                 setFormName(STUDENTS_6B[0]);
+                               } else {
+                                 setFormName('');
+                               }
+                             } else {
+                               setFormName('');
+                             }
+                           }}
+                           className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
+                         >
+                           {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => (
+                             <option key={n} value={n}>
+                               {n}-sinf
+                             </option>
+                           ))}
+                         </select>
+                       </div>
+                       
+                       <div>
+                         <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                           Sinf Harfi / turi
+                         </label>
+                         <select
+                           value={formClassLetter}
+                           onChange={(e) => {
+                             const val = e.target.value as 'A' | 'B' | '';
+                             setFormClassLetter(val);
+                             // Align current candidate selection to the corresponding division
+                             if (formClassGroup === 6 && modalType === 'O\'quvchi') {
+                               if (val === 'A') {
+                                 setFormName(STUDENTS_6A[0]);
+                               } else if (val === 'B') {
+                                 setFormName(STUDENTS_6B[0]);
+                               } else {
+                                 setFormName('');
+                               }
+                             } else {
+                               setFormName('');
+                             }
+                           }}
+                           className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
+                         >
+                           <option value="A">A - sinf</option>
+                           <option value="B">B - sinf</option>
+                           <option value="">Standart</option>
+                         </select>
+                       </div>
+                     </div>
+ 
+                     {/* 2. Ism va Familiya - Dynamic auto-completed or manually typed */}
+                     <div className="col-span-1 sm:col-span-2 landscape:col-span-2 md:col-span-2">
+                       <div className="flex justify-between items-center mb-1">
+                         <label className="block text-[11px] font-bold text-stone-500 font-sans">
+                           Ism va Familiya
+                         </label>
+                         {formClassGroup === 6 && modalType === 'O\'quvchi' && (formClassLetter === 'A' || formClassLetter === 'B') && (
+                           <button
+                             type="button"
+                             onClick={() => {
+                               if (formClassLetter === 'A') {
+                                 setFormName(STUDENTS_6A.includes(formName) ? '' : STUDENTS_6A[0]);
+                               } else {
+                                 setFormName(STUDENTS_6B.includes(formName) ? '' : STUDENTS_6B[0]);
+                               }
+                             }}
+                             className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-lg border border-emerald-150 hover:bg-emerald-100 transition cursor-pointer"
+                           >
+                             {(formClassLetter === 'A' ? STUDENTS_6A.includes(formName) : STUDENTS_6B.includes(formName)) 
+                               ? "✍️ Qo'lda yozish" 
+                               : "📋 Ro'yxatdan tanlash"
+                             }
+                           </button>
+                         )}
+                       </div>
+ 
+                       {formClassGroup === 6 && modalType === 'O\'quvchi' && (formClassLetter === 'A' || formClassLetter === 'B') && 
+                        (formClassLetter === 'A' ? STUDENTS_6A.includes(formName) || formName === '' : STUDENTS_6B.includes(formName) || formName === '') ? (
+                         <select
+                           value={formName}
+                           onChange={(e) => setFormName(e.target.value)}
+                           className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-800 focus:border-[#10b981] outline-none"
+                         >
+                           <option value="">-- O'quvchini tanlang --</option>
+                           {(formClassLetter === 'A' ? STUDENTS_6A : STUDENTS_6B).map((student) => (
+                             <option key={student} value={student}>
+                               {student}
+                             </option>
+                           ))}
+                         </select>
+                       ) : (
+                         <input
+                           type="text"
+                           required
+                           value={formName}
+                           onChange={(e) => setFormName(e.target.value)}
+                           placeholder="Ism va Familiyani kiriting..."
+                           className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-800 focus:border-[#10b981] outline-none placeholder:text-stone-300"
+                         />
+                       )}
+                     </div>
 
-                {/* 1. Sinf Row */}
-                <div>
-                  <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                    Sinf
-                  </label>
-                  <select
-                    value={formClassGroup}
-                    onChange={(e) => setFormClassGroup(Number(e.target.value))}
-                    className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
-                  >
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => (
-                      <option key={n} value={n}>
-                        {n}-sinf
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 2. Ism va Familiya */}
-                <div>
-                  <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                    Ism va Familiya
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
-                    placeholder="To'liq ism familiya"
-                    className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-800 focus:border-[#10b981] outline-none placeholder:text-stone-400"
-                  />
-                </div>
-
-                {/* 3. Kitob Nomi dropdown replacement (as requested: "kitob nomini ochir u yerda tnlaydigan qoyilsin") */}
-                <div>
-                  <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                    Imtihon / Natija turi
-                  </label>
-                  <select
-                    value={formExamType}
-                    onChange={(e) => setFormExamType(e.target.value as any)}
-                    className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
-                  >
-                    <option value="Kitobxonlik imtihoni">Kitobxonlik imtihoni</option>
-                    <option value="Haftalik imtihon">Haftalik imtihon</option>
-                    <option value="Oylik imtihon">Oylik imtihon</option>
-                    <option value="Choraklik imtihon">Choraklik imtihon</option>
-                    <option value="Yillik imtihon">Yillik imtihon jurnali</option>
-                  </select>
-                </div>
-
-                {/* 4. Conditional Content based on selections */}
-                <AnimatePresence mode="wait">
-                  {formExamType === 'Kitobxonlik imtihoni' ? (
-                    <motion.div
-                      key="kitobxonlik-extra"
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="space-y-1 overflow-hidden"
-                    >
+                    {/* 3. Imtihon / Natija turi */}
+                    <div className="col-span-1">
                       <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                        Qaysi kitob o'qigani (Kitob nomi)
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={formBookName}
-                        onChange={(e) => setFormBookName(e.target.value)}
-                        placeholder="Kitob nomini kiriting"
-                        className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-800 focus:border-[#10b981] outline-none"
-                      />
-                    </motion.div>
-                  ) : (
-                    <motion.div
-                      key="exam-extra"
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="space-y-1 overflow-hidden"
-                    >
-                      <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                        Fan bo'limini tanlang ("rus tili, ingiliz tili, matematika, ona tili, IT")
+                        Imtihon / Natija turi
                       </label>
                       <select
-                        value={formSubject}
-                        onChange={(e) => setFormSubject(e.target.value)}
+                        value={formExamType}
+                        onChange={(e) => setFormExamType(e.target.value as any)}
                         className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
                       >
-                        <option value="Rus tili">Rus tili</option>
-                        <option value="Ingliz tili">Ingliz tili</option>
-                        <option value="Matematika">Matematika</option>
-                        <option value="Ona tili">Ona tili</option>
-                        <option value="IT">IT (Informatika)</option>
+                        <option value="Kitobxonlik imtihoni">Kitobxonlik imtihoni</option>
+                        <option value="Haftalik imtihon">Haftalik imtihon</option>
+                        <option value="Oylik imtihon">Oylik imtihon</option>
+                        <option value="Choraklik imtihon">Choraklik imtihon</option>
+                        <option value="Yillik imtihon">Yillik imtihon jurnali</option>
                       </select>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                    </div>
 
-                {/* Single Row for Date */}
-                <div>
-                  <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                    Olgan sanasi
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={formDate}
-                    onChange={(e) => setFormDate(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-800 focus:border-[#10b981] outline-none"
-                  />
-                </div>
+                    {/* 4. Conditional Content based on selections */}
+                    <div className="col-span-1">
+                      <AnimatePresence mode="wait">
+                        {formExamType === 'Kitobxonlik imtihoni' ? (
+                          <motion.div
+                            key="kitobxonlik-extra"
+                            initial={{ opacity: 0, y: -5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -5 }}
+                            className="space-y-1 block"
+                          >
+                            <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                              Qaysi kitob o'qigani (Kitob nomi)
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              value={formBookName}
+                              onChange={(e) => setFormBookName(e.target.value)}
+                              placeholder="Kitob nomini kiriting"
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-800 focus:border-[#10b981] outline-none"
+                            />
+                          </motion.div>
+                        ) : (
+                          <motion.div
+                            key="exam-extra"
+                            initial={{ opacity: 0, y: -5 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -5 }}
+                            className="space-y-1 block"
+                          >
+                            <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                              Fan bo'limini tanlang
+                            </label>
+                            <select
+                              value={formSubject}
+                              onChange={(e) => setFormSubject(e.target.value)}
+                              className="w-full px-3 py-2.5 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-850 focus:border-[#10b981] outline-none"
+                            >
+                              <option value="Rus tili">Rus tili</option>
+                              <option value="Ingliz tili">Ingliz tili</option>
+                              <option value="Matematika">Matematika</option>
+                              <option value="Ona tili">Ona tili</option>
+                              <option value="IT">IT (Informatika)</option>
+                            </select>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
 
-                {/* Split Row for Page numbers / Result and Grades */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                      Natija (ball yoki sahifa)
-                    </label>
-                    <input
-                      type="number"
-                      required
-                      min="0"
-                      value={formResult}
-                      onChange={(e) => setFormResult(Number(e.target.value))}
-                      className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-mono font-bold text-stone-800"
-                    />
+                    {/* Single Row for Date */}
+                    <div className="col-span-1">
+                      <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                        Olgan sanasi
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={formDate}
+                        onChange={(e) => setFormDate(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-sans text-stone-800 focus:border-[#10b981] outline-none"
+                      />
+                    </div>
+
+                    {/* Split Row for Page numbers / Result and Grades */}
+                    <div className="col-span-1 sm:col-span-2 landscape:col-span-2 md:col-span-2 grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                          Natija (ball yoki sahifa)
+                        </label>
+                        <input
+                          type="number"
+                          required
+                          min="0"
+                          value={formResult}
+                          onChange={(e) => setFormResult(Number(e.target.value))}
+                          className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-mono font-bold text-stone-800 focus:border-[#10b981] outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
+                          Baho (1-100)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          required
+                          value={formGrade}
+                          onChange={(e) => setFormGrade(Number(e.target.value))}
+                          className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-mono font-bold text-stone-800 focus:border-[#10b981] outline-none"
+                        />
+                      </div>
+                    </div>
+
                   </div>
 
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-500 mb-1 font-sans">
-                      Baho (1-100)
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      required
-                      value={formGrade}
-                      onChange={(e) => setFormGrade(Number(e.target.value))}
-                      className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs font-mono font-bold text-stone-800"
-                    />
-                  </div>
                 </div>
 
-                {/* Row for Form Controls */}
-                <div className="flex items-center justify-end gap-3 pt-3 border-t border-stone-100">
+                {/* Form Controls - Pinned at the bottom */}
+                <div className="flex items-center justify-end gap-3 px-6 py-4.5 bg-stone-50 border-t border-stone-100 shrink-0">
                   <button
                     type="button"
                     onClick={() => setShowAddModal(false)}

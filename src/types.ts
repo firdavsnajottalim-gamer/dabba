@@ -2,6 +2,7 @@ export interface JournalRecord {
   id: string;
   type: 'O\'quvchi' | 'O\'qituvchi';
   classGroup: number; // 1 to 11
+  classLetter?: 'A' | 'B' | ''; // 'A' | 'B' or empty for other/unselected
   name: string; // Ism va Familiya
   examType: 'Haftalik imtihon' | 'Choraklik imtihon' | 'Oylik imtihon' | 'Yillik imtihon' | 'Kitobxonlik imtihoni';
   subject?: string; // Rus tili, Ingliz tili, Matematika, Ona tili, IT
